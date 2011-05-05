@@ -29,9 +29,9 @@
 
 #define DEFAULT_CACHE_SIZE 20
 #define DEFAULT_PARTIAL_VIEW_SIZE 5
+#define DEFAULT_CLOUDCAST_PERIOD 10000000 // 10 seconds
 
 #define CLOUDCAST_TRESHOLD 4
-#define CLOUDCAST_PERIOD 10000000 // 10 seconds
 #define CLOUDCAST_BOOTSTRAP_PERIOD 2000000 // 2 seconds
 
 struct peersampler_context{
@@ -81,7 +81,6 @@ static struct peersampler_context* cloudcast_context_init(void){
   //Initialize context with default values
   con->bootstrap = true;
   con->bootstrap_period = CLOUDCAST_BOOTSTRAP_PERIOD;
-  con->period = CLOUDCAST_PERIOD;
   con->currtime = gettime();
   con->cloud_contact_treshold = CLOUDCAST_TRESHOLD;
   con->last_cloud_contact_sec = 0;
@@ -122,6 +121,10 @@ static struct peersampler_context* cloudcast_init(struct nodeID *myID, const voi
   con->local_node = myID;
 
   cfg_tags = config_parse(config);
+  res = config_value_int(cfg_tags, "period", &(con->period));
+  if (res) con->period = con->period * 1000000; /* convert in microseconds */
+  else con->period = DEFAULT_CLOUDCAST_PERIOD;
+
   res = config_value_int(cfg_tags, "cache_size", &(con->cache_size));
   if (!res) {
     con->cache_size = DEFAULT_CACHE_SIZE;

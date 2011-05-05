@@ -53,10 +53,13 @@ struct delegate_iface {
 
 struct mysql_cloud_context {
   struct req_handler_ctx *req_handler;
-  MYSQL *mysql;
   time_t last_rsp_timestamp;
 
-  char *table;
+  const char *mysql_table;
+  const char *mysql_host;
+  const char *mysql_user;
+  const char *mysql_pass;
+  const char *mysql_db;
 };
 
 
@@ -108,22 +111,46 @@ static const char* parse_required_param(struct tag *cfg_tags, const char *name)
 }
 
 
-static MYSQL* init_mysql(MYSQL **mysql) {
+static int init_mysql() {
   /* initialize library */
   if (mysql_library_init(0, NULL, NULL)) {
     fprintf(stderr,
             "mysql_delegate_helper: could not initialize MySQL library\n");
+    return 1;
+  }
+
+  return 0;
+}
+
+static MYSQL* get_connection(struct mysql_cloud_context *ctx, int *err)
+{
+  MYSQL *mysql;
+  if (err) *err = 0;
+
+  /* initialize mysql object */
+  mysql = NULL;
+  mysql = mysql_init(mysql);
+  if (!mysql) {
+    if (err) *err = -1;
     return NULL;
   }
 
-  /* initialize mysql object */
-  *mysql = NULL;
-  *mysql = mysql_init(*mysql);
+  if (!mysql_real_connect(mysql, ctx->mysql_host, ctx->mysql_user,
+                          ctx->mysql_pass, ctx->mysql_db, 0, NULL, 0)) {
+    fprintf(stderr,"mysql_delegate_helper: error connecting to db: %s\n",
+            mysql_error(mysql));
+    if (err) *err = 1;
+    mysql_close(mysql);
+    return NULL;
+  }
 
-  return *mysql;
+  return mysql;
 }
 
-static int init_database(MYSQL *mysql, char *table)
+
+
+
+static int init_database(MYSQL *mysql, const char *table)
 {
   char query[256];
   int error;
@@ -148,7 +175,6 @@ static int init_database(MYSQL *mysql, char *table)
 static void deallocate_context(struct mysql_cloud_context *ctx)
 {
   req_handler_destroy(ctx->req_handler);
-  mysql_close(ctx->mysql);
   mysql_library_end();
 }
 
@@ -177,6 +203,7 @@ static void free_response(mysql_get_response_t *rsp)
  ***********************************************************************/
 int process_get_operation(void *req_data, void **rsp_data)
 {
+  MYSQL *mysql;
   MYSQL_RES *result;
   MYSQL_ROW row;
   mysql_request_t *req;
@@ -187,18 +214,25 @@ int process_get_operation(void *req_data, void **rsp_data)
 
   req = (mysql_request_t *) req_data;
 
+  mysql = get_connection(req->helper_ctx, &err);
+  if (!mysql) return 1;
+
   snprintf(query, 255, "SELECT cloud_value, timestamp FROM %s WHERE " \
-           "cloud_key='%s'", req->helper_ctx->table , req->key);
-  err = mysql_query(req->helper_ctx->mysql, query);
+           "cloud_key='%s'", req->helper_ctx->mysql_table , req->key);
+  err = mysql_query(mysql, query);
   if (err) {
     fprintf(stderr,
             "mysql_delegate_helper: error retrieving key: %s\n",
-            mysql_error(req->helper_ctx->mysql));
+            mysql_error(mysql));
+    mysql_close(mysql);
     return -1;
   }
 
   rsp = malloc(sizeof(mysql_get_response_t));
-  if (!rsp) return -1;
+  if (!rsp) {
+    return -1;
+    mysql_close(mysql);
+  }
 
   /* initialize response */
   *rsp_data = rsp;
@@ -209,7 +243,7 @@ int process_get_operation(void *req_data, void **rsp_data)
   rsp->read_bytes = 0;
   rsp->last_timestamp = -1;
 
-  result = mysql_store_result(req->helper_ctx->mysql);
+  result = mysql_store_result(mysql);
   if (result) {
     row = mysql_fetch_row(result);
     if (row) {
@@ -254,6 +288,7 @@ int process_get_operation(void *req_data, void **rsp_data)
     }
     mysql_free_result(result);
   }
+  mysql_close(mysql);
 
   return 0;
 }
@@ -261,6 +296,7 @@ int process_get_operation(void *req_data, void **rsp_data)
 int process_put_operation(struct mysql_cloud_context *ctx,
                           mysql_request_t *req)
 {
+  MYSQL *mysql;
   char raw_stmt[] = "INSERT INTO %s(cloud_key,cloud_value,timestamp, counter)" \
     "VALUES('%s', '%s', %ld, 0) ON DUPLICATE KEY UPDATE "                  \
     "cloud_value='%s', timestamp=%ld, counter=counter+1";
@@ -271,9 +307,12 @@ int process_put_operation(struct mysql_cloud_context *ctx,
   int err;
   time_t now;
 
+  mysql = get_connection(req->helper_ctx, &err);
+  if (!mysql) return 1;
+
   escaped_value = calloc(req->data_length*2+1, sizeof(char));
 
-  escaped_length = mysql_real_escape_string(ctx->mysql,
+  escaped_length = mysql_real_escape_string(mysql,
                                             escaped_value,
                                             req->data,
                                             req->data_length);
@@ -281,20 +320,22 @@ int process_put_operation(struct mysql_cloud_context *ctx,
 
   /* reserve space for the statement: len(value/ts)+len(key)+len(SQL_cmd) */
   stmt_length = 2*escaped_length + 2*20 + strlen(req->key) + strlen(raw_stmt) \
-    + strlen(ctx->table);
+    + strlen(ctx->mysql_table);
   stmt = calloc(stmt_length, sizeof(char));
 
   now = time(NULL);
-  stmt_length = snprintf(stmt, stmt_length, raw_stmt, ctx-> table, req->key,
+  stmt_length = snprintf(stmt, stmt_length, raw_stmt, ctx->mysql_table, req->key,
                          escaped_value, now, escaped_value, now);
 
-  err = mysql_real_query(ctx->mysql, stmt, stmt_length);
+  err = mysql_real_query(mysql, stmt, stmt_length);
   if (err) {
     fprintf(stderr,
             "mysql_delegate_helper: error setting key: %s\n",
-            mysql_error(ctx->mysql));
+            mysql_error(mysql));
+    mysql_close(mysql);
     return 1;
   }
+  mysql_close(mysql);
 
   return 0;
 }
@@ -307,64 +348,55 @@ void* cloud_helper_init(struct nodeID *local, const char *config)
 {
   struct mysql_cloud_context *ctx;
   struct tag *cfg_tags;
-
-  const char *mysql_host;
-  const char *mysql_user;
-  const char *mysql_pass;
-  const char *mysql_db;
-
+  MYSQL *mysql;
 
   ctx = malloc(sizeof(struct mysql_cloud_context));
   memset(ctx, 0, sizeof(struct mysql_cloud_context));
   cfg_tags = config_parse(config);
 
   /* Parse fundametal parameters */
-  if (!(mysql_host=parse_required_param(cfg_tags, "mysql_host"))) {
+  if (!(ctx->mysql_host=parse_required_param(cfg_tags, "mysql_host"))) {
     deallocate_context(ctx);
     return NULL;
   }
 
-  if (!(mysql_user=parse_required_param(cfg_tags, "mysql_user"))) {
+  if (!(ctx->mysql_user=parse_required_param(cfg_tags, "mysql_user"))) {
     deallocate_context(ctx);
     return NULL;
   }
 
-  if (!(mysql_pass=parse_required_param(cfg_tags, "mysql_pass"))) {
+  if (!(ctx->mysql_pass=parse_required_param(cfg_tags, "mysql_pass"))) {
     deallocate_context(ctx);
     return NULL;
   }
 
-  if (!(mysql_db=parse_required_param(cfg_tags, "mysql_db"))) {
+  if (!(ctx->mysql_db=parse_required_param(cfg_tags, "mysql_db"))) {
     deallocate_context(ctx);
     return NULL;
   }
 
-  if (!(ctx->table=parse_required_param(cfg_tags, "mysql_table"))) {
-    ctx->table = "cloud";
+  if (!(ctx->mysql_table=config_value_str(cfg_tags, "mysql_table"))) {
+    ctx->mysql_table = "cloud";
   }
 
-  ctx->mysql = init_mysql(&ctx->mysql);
-  if (!ctx->mysql) {
+  if (init_mysql() != 0) {
     deallocate_context(ctx);
     return NULL;
   }
 
-  if (!mysql_real_connect(ctx->mysql,
-                          mysql_host,
-                          mysql_user,
-                          mysql_pass,
-                          mysql_db,
-                          0, NULL, 0)) {
-    fprintf(stderr,"mysql_delegate_helper: error connecting to db: %s\n",
-            mysql_error(ctx->mysql));
+  mysql = get_connection(ctx, NULL);
+  if (!mysql) {
     deallocate_context(ctx);
+    mysql_close(mysql);
     return NULL;
   }
 
-  if (init_database(ctx->mysql, ctx->table) != 0) {
+  if (init_database(mysql, ctx->mysql_table) != 0) {
     deallocate_context(ctx);
+    mysql_close(mysql);
     return NULL;
   }
+  mysql_close(mysql);
 
   ctx->req_handler = req_handler_init();
   if (!ctx->req_handler) {

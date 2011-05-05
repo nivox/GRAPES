@@ -140,7 +140,7 @@ static struct peersampler_context* cloudcast_init(struct nodeID *myID, const voi
 
   res = config_value_double(cfg_tags, "cloud_respawn_prob", &(con->cloud_respawn_prob));
   if (!res) {
-    con->max_silence = 0;
+    con->cloud_respawn_prob = 0;
   }
 
   con->local_cache = cache_init(con->cache_size, metadata_size, 0);

@@ -11,6 +11,7 @@
  *  - mysql_user*:  the mysql user
  *  - mysql_pass*:  the mysql password
  *  - mysql_db*:    the mysql database to use
+ *  - mysql_table*: the mysql table to use (default cloud)
  */
 
 #include <stdlib.h>
@@ -54,6 +55,8 @@ struct mysql_cloud_context {
   struct req_handler_ctx *req_handler;
   MYSQL *mysql;
   time_t last_rsp_timestamp;
+
+  char *table;
 };
 
 
@@ -120,16 +123,16 @@ static MYSQL* init_mysql(MYSQL **mysql) {
   return *mysql;
 }
 
-static int init_database(MYSQL *mysql)
+static int init_database(MYSQL *mysql, char *table)
 {
   char query[256];
   int error;
-  snprintf(query, 256, "CREATE TABLE IF NOT EXISTS cloud ("   \
+  snprintf(query, 256, "CREATE TABLE IF NOT EXISTS %s ("   \
            "  cloud_key VARCHAR(255),"\
            "  cloud_value BLOB," \
            "  timestamp INT UNSIGNED," \
            "  counter INT UNSIGNED," \
-           "  PRIMARY KEY (cloud_key))");
+           "  PRIMARY KEY (cloud_key))", table);
   error = mysql_query(mysql, query);
   if (error) {
     fprintf(stderr,
@@ -184,8 +187,8 @@ int process_get_operation(void *req_data, void **rsp_data)
 
   req = (mysql_request_t *) req_data;
 
-  snprintf(query, 127, "SELECT cloud_value, timestamp FROM cloud WHERE " \
-           "cloud_key='%s'", req->key);
+  snprintf(query, 255, "SELECT cloud_value, timestamp FROM %s WHERE " \
+           "cloud_key='%s'", req->helper_ctx->table , req->key);
   err = mysql_query(req->helper_ctx->mysql, query);
   if (err) {
     fprintf(stderr,
@@ -258,7 +261,7 @@ int process_get_operation(void *req_data, void **rsp_data)
 int process_put_operation(struct mysql_cloud_context *ctx,
                           mysql_request_t *req)
 {
-  char raw_stmt[] = "INSERT INTO cloud(cloud_key,cloud_value,timestamp, counter)" \
+  char raw_stmt[] = "INSERT INTO %s(cloud_key,cloud_value,timestamp, counter)" \
     "VALUES('%s', '%s', %ld, 0) ON DUPLICATE KEY UPDATE "                  \
     "cloud_value='%s', timestamp=%ld, counter=counter+1";
   char *stmt;
@@ -277,12 +280,13 @@ int process_put_operation(struct mysql_cloud_context *ctx,
 
 
   /* reserve space for the statement: len(value/ts)+len(key)+len(SQL_cmd) */
-  stmt_length = 2*escaped_length + 2*20 + strlen(req->key) + strlen(raw_stmt);
+  stmt_length = 2*escaped_length + 2*20 + strlen(req->key) + strlen(raw_stmt) \
+    + strlen(ctx->table);
   stmt = calloc(stmt_length, sizeof(char));
 
   now = time(NULL);
-  stmt_length = snprintf(stmt, stmt_length, raw_stmt, req->key, escaped_value,
-                         now, escaped_value, now);
+  stmt_length = snprintf(stmt, stmt_length, raw_stmt, ctx-> table, req->key,
+                         escaped_value, now, escaped_value, now);
 
   err = mysql_real_query(ctx->mysql, stmt, stmt_length);
   if (err) {
@@ -335,6 +339,10 @@ void* cloud_helper_init(struct nodeID *local, const char *config)
     return NULL;
   }
 
+  if (!(ctx->table=parse_required_param(cfg_tags, "mysql_table"))) {
+    ctx->table = "cloud";
+  }
+
   ctx->mysql = init_mysql(&ctx->mysql);
   if (!ctx->mysql) {
     deallocate_context(ctx);
@@ -353,7 +361,7 @@ void* cloud_helper_init(struct nodeID *local, const char *config)
     return NULL;
   }
 
-  if (init_database(ctx->mysql) != 0) {
+  if (init_database(ctx->mysql, ctx->table) != 0) {
     deallocate_context(ctx);
     return NULL;
   }

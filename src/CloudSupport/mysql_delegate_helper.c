@@ -465,6 +465,7 @@ int put_on_cloud(void *context, const char *key, uint8_t *buffer_ptr,
   request->default_value = NULL;
   request->default_value_length = 0;
   request->free_default_value = 0;
+  request->helper_ctx = ctx;
   res = process_put_operation(ctx, request);
   free_request(request);
   return res;

@@ -247,6 +247,10 @@ static int cloudcast_cloud_dialogue(struct peersampler_context *context,
       g++;
     }
 
+    /* Artificially age cloud entries */
+    for (i=0; i<delta/context->period; i++)
+      cache_update(cloud_cache);
+
     /* Fill up the reply with g spots free for cloud entries */
     remote_cache = rand_cache_except(cloud_cache, context->sent_entries-g,
                                      &context->local_node, 1);

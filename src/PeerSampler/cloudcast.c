@@ -297,6 +297,7 @@ static int silence_treshold(struct peersampler_context *context)
 
 static int cloudcast_active_thread(struct peersampler_context *context)
 {
+  struct nodeID *saved_cloud_entry = NULL;
   int err = 0;
 
   /* If space permits, re-insert old entries that have been sent in the previous
@@ -313,6 +314,19 @@ static int cloudcast_active_thread(struct peersampler_context *context)
   /* Increase age of all nodes in the view */
   cache_update(context->local_cache);
 
+  if (context->dst) {
+    /* The last active cycle didn't go smoothly. If the destination was a peer
+       just forget it, but if it was the cloud we should save the entry as
+       otherwise a temporary cloud downtime could cause the loosing of all the
+       cloud entries in the network */
+    if (cloudcast_is_cloud_node(context->proto_context, context->dst))
+      saved_cloud_entry = context->dst;
+    else
+      nodeid_free(context->dst);
+
+    context->dst = NULL;
+  }
+
   /* Select oldest node in the view */
   context->dst = last_peer(context->local_cache);
 
@@ -323,6 +337,9 @@ static int cloudcast_active_thread(struct peersampler_context *context)
 
   context->dst = nodeid_dup(context->dst);
   cache_del(context->local_cache, context->dst);
+  if (saved_cloud_entry) {
+    cache_add(context->local_cache, saved_cloud_entry, NULL, 0);
+  }
 
   /* If enabled, readd a cloud node when too much time is passed from the
      last contact (computed globally) */
@@ -336,6 +353,11 @@ static int cloudcast_active_thread(struct peersampler_context *context)
 
     /* Request cloud view */
     err = cloudcast_query_cloud(context->proto_context);
+    if (err != 0) {
+      /* Don't remove cloud entries on error! We may risk to lose all cloud
+         nodes in the network */
+      cache_add(context->local_cache, context->dst, NULL, 0);
+    }
   } else {
     /* Fill up request keeping space for local descriptor */
     context->flying_cache = rand_cache(context->local_cache,
@@ -393,9 +415,23 @@ cloudcast_parse_data(struct peersampler_context *context, const uint8_t *buff,
     } else if(th->type == CLOUDCAST_REPLY){
       /* We've received the response to our query from the remote peer */
       err = cloudcast_reply(context, remote_cache);
+
+      /* If we completed an active peer cycle clear current dst */
+      if (context->dst &&
+          !cloudcast_is_cloud_node(context->proto_context, context->dst)) {
+        nodeid_free(context->dst);
+        context->dst = NULL;
+      }
     } else if (th->type == CLOUDCAST_CLOUD) {
       /* We've received the response form the cloud. Simulate dialogue */
       err = cloudcast_cloud_dialogue(context, remote_cache);
+
+      /* If we successfully completed an active cloud cycle clear current dst */
+      if (!err && context->dst &&
+          cloudcast_is_cloud_node(context->proto_context, context->dst)) {
+        nodeid_free(context->dst);
+        context->dst = NULL;
+      }
     } else {
       fprintf(stderr, "Cloudcast: Wrong message type: %d\n", th->type);
       return -1;

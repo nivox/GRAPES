@@ -184,6 +184,9 @@ static int cloudcast_query(struct peersampler_context *context,
   cache_fill_rand(context->local_cache, remote_cache,
                     context->cache_size - context->reserved_entries);
 
+  /* If space permits, re-insert entries sent entries */
+  cache_fill_rand(context->local_cache, sent_cache,
+                  context->cache_size - context->reserved_entries);
 
   cache_free(remote_cache);
   cache_free(sent_cache);
@@ -265,11 +268,18 @@ static int cloudcast_cloud_dialogue(struct peersampler_context *context,
     /* Insert remote entries in local view */
     cache_fill_rand(context->local_cache, remote_cache, 0);
 
+    /* If space permits, re-insert entries sent to the cloud */
+    cache_fill_rand(context->local_cache, sent_cache,
+                    context->cache_size - context->reserved_entries);
+
     /* Insert sent entries in cloud view */
     cache_del(cloud_cache, context->local_node);
     cache_resize(cloud_cache, context->cache_size);
     assert(cache_max_size(cloud_cache) == context->cache_size);
     cache_fill_rand(cloud_cache, sent_cache, 0);
+
+    /* If space permits, re-insert entries the cloud sent us */
+    cache_fill_rand(cloud_cache, remote_cache, 0);
 
     /* Write the new view in the cloud */
     cloudcast_reply_cloud(context->proto_context, cloud_cache);

@@ -467,36 +467,9 @@ static const struct nodeID **cloudcast_get_neighbourhood(struct peersampler_cont
   for (*n = 0; nodeid(context->local_cache, *n) && (*n < context->cache_size); (*n)++) {
     context->r[*n] = nodeid(context->local_cache, *n);
   }
-  if (context->flying_cache) {
-    int i,j,dup;
 
-    for (i = 0; nodeid(context->flying_cache, i) && (*n < context->cache_size); (*n)++, i++) {
-      dup = 0;
-      for (j = 0; j<*n; j++){
-        if (nodeid_equal(context->r[j], nodeid(context->flying_cache, i))){
-          dup = 1;
-          continue;
-        }
-      }
-      if (dup) (*n)--;
-      else context->r[*n] = nodeid(context->flying_cache, i);
-    }
-  }
-
-  if (context->dst && (*n < context->cache_size)) {
-    int j,dup;
-    dup = 0;
-    for (j = 0; j<*n; j++){
-      if (nodeid_equal(context->r[j], context->dst)){
-        dup = 1;
-        continue;
-      }
-    }
-    if (!dup){
-      context->r[*n] = context->dst;
-      (*n)++;
-    }
-  }
+  /* Neighborhood can't contains flying cache or current destination as this
+     will interfere with the order assumption of get_metadata!!! */
 
   return (const struct nodeID **)context->r;
 }

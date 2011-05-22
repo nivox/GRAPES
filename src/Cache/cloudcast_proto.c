@@ -19,12 +19,12 @@
 // TODO: This should not be duplicated here. should inherit from topo_proto.c
 #define MAX_MSG_SIZE 1500
 
-#define CLOUD_VIEW_KEY "view"
 #define CLOUDCAST_MESSAGE_HEADER 10 /* PROTOCOL MSG_TYPE LAST_CLOUD_CONTACT */
 
 uint8_t cloud_header[10] = { MSG_TYPE_TOPOLOGY, CLOUDCAST_CLOUD, 0llu};
 
 struct cloudcast_proto_context {
+  const char *view_key;
   struct peer_cache* myEntry;
   uint8_t def_cloudcache[128];
   int def_cloudcache_len;
@@ -34,7 +34,7 @@ struct cloudcast_proto_context {
 
 int cloudcast_payload_fill(struct cloudcast_proto_context *context, uint8_t *payload, int size, struct peer_cache *c, int max_peers, int include_me);
 
-struct cloudcast_proto_context* cloudcast_proto_init(struct nodeID *s, const void *meta, int meta_size)
+struct cloudcast_proto_context* cloudcast_proto_init(struct nodeID *s, const char *view_key, const void *meta, int meta_size)
 {
   struct cloudcast_proto_context *con;
   struct peer_cache *tmp;
@@ -44,7 +44,7 @@ struct cloudcast_proto_context* cloudcast_proto_init(struct nodeID *s, const voi
     fprintf(stderr, "cloudcast_proto: Error initializing context. ENOMEM\n");
     return NULL;
   }
-
+  con->view_key = view_key;
   con->topo_context = topo_proto_init(s, meta, meta_size);
   if (!con->topo_context){
     fprintf(stderr, "cloudcast_proto: Error initializing topo_proto.\n");
@@ -142,7 +142,7 @@ int cloudcast_reply_cloud(struct cloudcast_proto_context *context, struct peer_c
   len = cloudcast_payload_fill(context, headerless_pkt, MAX_MSG_SIZE - CLOUDCAST_MESSAGE_HEADER, cloud_cache, 0, 1);
 
   if (len > 0)
-    res = put_on_cloud(context->cloud_context, CLOUD_VIEW_KEY, headerless_pkt, len, 0);
+    res = put_on_cloud(context->cloud_context, context->view_key, headerless_pkt, len, 0);
   else
     res = 0;
   return res;
@@ -150,7 +150,7 @@ int cloudcast_reply_cloud(struct cloudcast_proto_context *context, struct peer_c
 
 int cloudcast_query_cloud(struct cloudcast_proto_context *context)
 {
-  return get_from_cloud_default(context->cloud_context, CLOUD_VIEW_KEY,
+  return get_from_cloud_default(context->cloud_context, context->view_key,
                                 cloud_header, CLOUDCAST_MESSAGE_HEADER,
                                 0, context->def_cloudcache,
                                 context->def_cloudcache_len, 0);

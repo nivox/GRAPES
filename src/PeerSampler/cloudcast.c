@@ -30,6 +30,7 @@
 #define DEFAULT_CACHE_SIZE 20
 #define DEFAULT_PARTIAL_VIEW_SIZE 5
 #define DEFAULT_CLOUDCAST_PERIOD 10000000 // 10 seconds
+#define DEFAULT_VIEW_KEY "view"
 
 #define CLOUDCAST_TRESHOLD 4
 #define CLOUDCAST_BOOTSTRAP_PERIOD 2000000 // 2 seconds
@@ -115,6 +116,7 @@ static struct peersampler_context* cloudcast_init(struct nodeID *myID, const voi
   struct tag *cfg_tags;
   struct peersampler_context *con;
   int res;
+  const char *view_key;
 
   con = cloudcast_context_init();
   if (!con) return NULL;
@@ -133,16 +135,18 @@ static struct peersampler_context* cloudcast_init(struct nodeID *myID, const voi
   if (!res) {
     con->sent_entries = DEFAULT_PARTIAL_VIEW_SIZE;
   }
+  view_key = config_value_str(cfg_tags, "view_key");
+  if (!view_key) {
+    view_key = DEFAULT_VIEW_KEY;
+  }
   res = config_value_int(cfg_tags, "max_silence", &(con->max_silence));
   if (!res) {
     con->max_silence = 0;
   }
-
   res = config_value_double(cfg_tags, "cloud_respawn_prob", &(con->cloud_respawn_prob));
   if (!res) {
     con->cloud_respawn_prob = 0;
   }
-
   con->local_cache = cache_init(con->cache_size, metadata_size, 0);
   if (con->local_cache == NULL) {
     fprintf(stderr, "cloudcast: Error initializing local cache\n");
@@ -150,7 +154,7 @@ static struct peersampler_context* cloudcast_init(struct nodeID *myID, const voi
     return NULL;
   }
 
-  con->proto_context = cloudcast_proto_init(myID, metadata, metadata_size);
+  con->proto_context = cloudcast_proto_init(myID, view_key, metadata, metadata_size);
   if (!con->proto_context){
     free(con->local_cache);
     free(con);

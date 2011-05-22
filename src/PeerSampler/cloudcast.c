@@ -53,6 +53,7 @@ struct peersampler_context{
 
   int reserved_entries;
   struct peer_cache *flying_cache;
+  struct peer_cache *neighborhood_cache;
   struct nodeID *dst;
 
   struct cloudcast_proto_context *proto_context;
@@ -88,6 +89,7 @@ static struct peersampler_context* cloudcast_context_init(void){
   con->max_silence = 0;
   con->cloud_respawn_prob = 0;
 
+  con->neighborhood_cache = NULL;
   con->r = NULL;
 
   return con;
@@ -463,24 +465,41 @@ cloudcast_parse_data(struct peersampler_context *context, const uint8_t *buff,
 
 static const struct nodeID **cloudcast_get_neighbourhood(struct peersampler_context *context, int *n)
 {
+  int metadata_size;
   context->r = realloc(context->r, context->cache_size * sizeof(struct nodeID *));
   if (context->r == NULL) {
     return NULL;
   }
 
-  for (*n = 0; nodeid(context->local_cache, *n) && (*n < context->cache_size); (*n)++) {
-    context->r[*n] = nodeid(context->local_cache, *n);
+  /* We must be consistent with cloudcast_get_metadata... Hence populate a
+     cache and use that to return info about the neighborhood. */
+
+  if (context->neighborhood_cache != NULL) {
+    cache_free(context->neighborhood_cache);
   }
 
-  /* Neighborhood can't contains flying cache or current destination as this
-     will interfere with the order assumption of get_metadata!!! */
+  get_metadata(context->local_cache, &metadata_size);
+  context->neighborhood_cache = cache_init(context->cache_size, metadata_size, 0);
+
+  cache_fill_ordered(context->neighborhood_cache, context->local_cache, 0);
+  if (context->flying_cache)
+    cache_fill_ordered(context->neighborhood_cache, context->flying_cache, 0);
+
+  for (*n = 0; nodeid(context->neighborhood_cache, *n) && (*n < context->cache_size); (*n)++) {
+    context->r[*n] = nodeid(context->neighborhood_cache, *n);
+  }
 
   return (const struct nodeID **)context->r;
 }
 
 static const void *cloudcast_get_metadata(struct peersampler_context *context, int *metadata_size)
 {
-  return get_metadata(context->local_cache, metadata_size);
+  if (context->neighborhood_cache == NULL) {
+    metadata_size = 0;
+    return NULL;
+  } else {
+    return get_metadata(context->neighborhood_cache, metadata_size);
+  }
 }
 
 static int cloudcast_grow_neighbourhood(struct peersampler_context *context, int n)
